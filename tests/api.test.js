@@ -450,6 +450,50 @@ describe('realtime', () => {
     controller.abort();
     admin.setCookie('');
   });
+
+  test('the revision cursor advances so polling clients can detect changes', async () => {
+    assert.equal((await client().get('/api/realtime/version')).status, 401);
+
+    const before = await student.get('/api/realtime/version');
+    assert.equal(before.status, 200);
+    assert.equal(before.body.transport, 'sse', 'a normal server process uses SSE');
+    assert.equal(typeof before.body.revision, 'number');
+
+    const applications = await company.get('/api/applications');
+    const applicationId = applications.body[0].id;
+    const moved = await company.patch(`/api/applications/${applicationId}`, {
+      status: 'Shortlisted',
+      note: 'Moved for the interview round.',
+    });
+    assert.equal(moved.status, 200);
+
+    // The broadcast advances the counter asynchronously.
+    let revision = before.body.revision;
+    for (let attempt = 0; attempt < 20 && revision === before.body.revision; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      revision = (await student.get('/api/realtime/version')).body.revision;
+    }
+
+    assert.ok(revision > before.body.revision, 'a status change moves the revision forward');
+  });
+
+  test('a Vercel deployment answers with the polling transport instead of a stream', async () => {
+    const previous = process.env.VERCEL;
+    process.env.VERCEL = '1';
+
+    try {
+      const info = await student.get('/api/realtime/version');
+      assert.equal(info.status, 200);
+      assert.equal(info.body.transport, 'poll');
+
+      // EventSource must not be left hanging by a serverless invocation.
+      const stream = await student.get('/api/realtime/events');
+      assert.equal(stream.status, 204);
+    } finally {
+      if (previous === undefined) delete process.env.VERCEL;
+      else process.env.VERCEL = previous;
+    }
+  });
 });
 
 describe('external jobs (Adzuna)', () => {

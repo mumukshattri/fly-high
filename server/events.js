@@ -17,9 +17,55 @@
  *     the caller. A leaked broadcast therefore reveals nothing.
  *   - Each connected client is tagged with its user, so we can avoid waking up
  *     every browser for an event that cannot concern it.
+ *
+ * SERVERLESS (VERCEL)
+ * -------------------
+ * A Vercel function cannot hold a stream open between invocations, so the same
+ * notifications are also recorded as a monotonic revision in MongoDB. Browsers
+ * poll `GET /api/realtime/version` (through the normal authenticated API) and
+ * refetch when the number moves. The counter lives in the database the app
+ * already uses, so every warm instance and every region sees the same value.
+ * SSE remains the transport for a long-running process.
  */
 
+import { RealtimeState } from './models/index.js';
+
 const clients = new Set(); // { res, userId, role }
+
+/** 'sse' for a normal server process, 'poll' when running on Vercel. */
+export function realtimeTransport() {
+  const explicit = String(process.env.REALTIME_TRANSPORT || '').trim().toLowerCase();
+  if (explicit === 'poll' || explicit === 'sse') return explicit;
+  return process.env.VERCEL ? 'poll' : 'sse';
+}
+
+/** Current global revision. 0 when nothing has been announced yet. */
+export async function currentRevision() {
+  try {
+    const doc = await RealtimeState.findById('global').lean();
+    return Number(doc?.revision) || 0;
+  } catch {
+    // A read must never make the realtime endpoint fail.
+    return 0;
+  }
+}
+
+/**
+ * Advance the revision. Called for every broadcast, cannot be awaited by the
+ * routes (they should not pay for it), so failures are swallowed: a missed
+ * tick only means a client notices on the next change instead.
+ */
+async function bumpRevision() {
+  try {
+    await RealtimeState.findOneAndUpdate(
+      { _id: 'global' },
+      { $inc: { revision: 1 } },
+      { upsert: true, new: true, setDefaultsOnInsert: true },
+    );
+  } catch {
+    /* database unavailable: SSE clients still get the in-process event */
+  }
+}
 
 export function addClient(res, user) {
   const client = { res, userId: String(user.id), role: user.role };
@@ -64,6 +110,9 @@ export function addClient(res, user) {
  */
 export function broadcast(resource, meta = {}) {
   const payload = `event: change\ndata: ${JSON.stringify({ resource, ...meta, at: Date.now() })}\n\n`;
+
+  // Durable cursor for polling clients (serverless deployments).
+  bumpRevision();
 
   for (const client of clients) {
     // A student's notification change is irrelevant to everyone else, and a

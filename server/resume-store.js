@@ -24,11 +24,18 @@
  * A legacy `.doc` (OLE compound file) is rejected with an actionable message,
  * and an executable renamed to `.pdf` never gets written to disk.
  *
- * MOVING TO OBJECT STORAGE
- * ------------------------
- * Everything goes through four functions (save / read / delete / info). Swapping
- * the directory for S3 or any private bucket means re-implementing those four
- * in this one file; no route or model changes.
+ * STORAGE BACKENDS
+ * ----------------
+ * Everything goes through four functions (save / read / delete / info), so the
+ * routes and the model never care where the bytes live:
+ *
+ *   fs      the private directory above - the default locally and in tests
+ *   gridfs  MongoDB GridFS - used automatically on Vercel, whose filesystem is
+ *           read-only apart from `/tmp` (which is per-instance and lost)
+ *
+ * Choose explicitly with RESUME_STORAGE_DRIVER=fs|gridfs. On Vercel the driver
+ * defaults to gridfs, so uploads, extraction, download, re-parse and deletion
+ * all work without an extra storage service or bucket credential.
  */
 
 import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
@@ -37,6 +44,7 @@ import { randomUUID } from 'node:crypto';
 
 import { RESUME_MAX_BYTES, RESUME_STORAGE_DIR } from './config.js';
 import { HttpError, cleanText } from './http.js';
+import mongoose from './db.js';
 
 export const RESUME_TYPES = {
   pdf: {
@@ -52,6 +60,34 @@ export const RESUME_TYPES = {
 };
 
 export const RESUME_ACCEPTED_MIME = Object.values(RESUME_TYPES).map((type) => type.mimeType);
+
+/** 'fs' or 'gridfs'. Vercel's filesystem only allows /tmp, so it gets GridFS. */
+const STORAGE_DRIVER = (() => {
+  const explicit = String(process.env.RESUME_STORAGE_DRIVER || '')
+    .trim()
+    .toLowerCase();
+  if (explicit === 'gridfs' || explicit === 'mongodb') return 'gridfs';
+  if (explicit === 'fs' || explicit === 'filesystem') return 'fs';
+  return process.env.VERCEL ? 'gridfs' : 'fs';
+})();
+
+export const RESUME_STORAGE_DRIVER = STORAGE_DRIVER;
+
+/** The GridFS bucket is created on demand: the database is connected by then. */
+function resumeBucket() {
+  if (!mongoose.connection.db) {
+    throw new HttpError(503, 'Resume storage is unavailable because the database is not connected.');
+  }
+  return new mongoose.mongo.GridFSBucket(mongoose.connection.db, { bucketName: 'resumes' });
+}
+
+/** 'gridfs:<24 hex>' -> ObjectId; throws a 404 for anything else. */
+function gridfsId(storedName) {
+  const value = String(storedName || '');
+  const match = /^gridfs:([a-f0-9]{24})$/.exec(value);
+  if (!match) throw new HttpError(404, 'Resume file not found.');
+  return new mongoose.Types.ObjectId(match[1]);
+}
 
 /** Human readable size limit, for error messages. */
 export function maxSizeLabel() {
@@ -105,9 +141,10 @@ export function sniffResume(buffer) {
   );
 }
 
-/** Only names this module created may ever reach the filesystem. */
+/** Only names this module created may ever reach storage. */
 function assertStoredName(storedName) {
   const value = String(storedName || '');
+  if (/^gridfs:[a-f0-9]{24}$/.test(value)) return value;
   if (!/^[a-f0-9]{24}\/[a-f0-9-]{36}\.(pdf|docx)$/.test(value)) {
     throw new HttpError(404, 'Resume file not found.');
   }
@@ -125,6 +162,27 @@ export async function saveResume({ studentId, buffer, fileName }) {
     cleanText(fileName, 200)
       .replace(/[\\/:*?"<>|]/g, '')
       .trim() || `resume.${type.ext}`;
+
+  if (STORAGE_DRIVER === 'gridfs') {
+    const id = new mongoose.Types.ObjectId();
+    await new Promise((resolve, reject) => {
+      const upload = resumeBucket().openUploadStreamWithId(id, `resume-${id}.${type.ext}`, {
+        contentType: type.mimeType,
+        metadata: { studentId, displayName, mimeType: type.mimeType },
+      });
+      upload.on('error', reject);
+      upload.on('finish', resolve);
+      upload.end(buffer);
+    });
+
+    return {
+      storedName: `gridfs:${id.toHexString()}`,
+      mimeType: type.mimeType,
+      kind: type.kind,
+      sizeBytes: buffer.length,
+      displayName,
+    };
+  }
 
   const storedName = `${studentId}/${randomUUID()}.${type.ext}`;
   const absolute = path.join(RESUME_STORAGE_DIR, ...storedName.split('/'));
@@ -145,6 +203,20 @@ export async function saveResume({ studentId, buffer, fileName }) {
 /** Read one stored resume. Throws 404 when the file is missing. */
 export async function readResume(storedName) {
   const safe = assertStoredName(storedName);
+
+  if (safe.startsWith('gridfs:')) {
+    const id = gridfsId(safe);
+    const chunks = [];
+    try {
+      for await (const chunk of resumeBucket().openDownloadStream(id)) {
+        chunks.push(chunk);
+      }
+    } catch {
+      throw new HttpError(404, 'The stored resume file is no longer available. Upload it again.');
+    }
+    return Buffer.concat(chunks);
+  }
+
   const absolute = path.join(RESUME_STORAGE_DIR, ...safe.split('/'));
   try {
     return await readFile(absolute);
@@ -162,11 +234,24 @@ export async function deleteResume(storedName) {
   } catch {
     return;
   }
+
+  if (safe.startsWith('gridfs:')) {
+    await resumeBucket()
+      .delete(gridfsId(safe))
+      .catch(() => {});
+    return;
+  }
+
   const absolute = path.join(RESUME_STORAGE_DIR, ...safe.split('/'));
   await unlink(absolute).catch(() => {});
 }
 
-/** True when the private storage directory is configured (used by tests). */
+/** Storage details, for diagnostics and tests. */
 export function resumeStorageInfo() {
-  return { directory: RESUME_STORAGE_DIR, maxBytes: RESUME_MAX_BYTES };
+  return {
+    driver: RESUME_STORAGE_DRIVER,
+    directory: RESUME_STORAGE_DRIVER === 'fs' ? RESUME_STORAGE_DIR : null,
+    bucket: RESUME_STORAGE_DRIVER === 'gridfs' ? 'resumes' : null,
+    maxBytes: RESUME_MAX_BYTES,
+  };
 }

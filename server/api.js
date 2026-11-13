@@ -63,8 +63,12 @@ import {
   serializeNotification,
   serializeStudent,
 } from './serialize.js';
-import { addClient } from './events.js';
-import { broadcast } from './events.js';
+import {
+  addClient,
+  broadcast,
+  currentRevision,
+  realtimeTransport,
+} from './events.js';
 import {
   checkUserThrottle,
   fetchCategories,
@@ -933,10 +937,35 @@ apiRouter.get(
 /* REAL-TIME                                                                  */
 /* -------------------------------------------------------------------------- */
 
+/**
+ * GET /api/realtime/version - the cursor a polling client watches.
+ *
+ * `transport` tells a browser which mechanism this deployment supports, so a
+ * Vercel function never leaves an EventSource hanging: it polls instead.
+ */
+apiRouter.get(
+  '/realtime/version',
+  requireAuth(),
+  asyncHandler(async (req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      revision: await currentRevision(),
+      transport: realtimeTransport(),
+      at: new Date().toISOString(),
+    });
+  }),
+);
+
 apiRouter.get(
   '/realtime/events',
   requireAuth(),
   asyncHandler(async (req, res) => {
+    // A long-lived stream makes no sense on a serverless platform: answer
+    // immediately and let the client use the revision cursor.
+    if (realtimeTransport() === 'poll') {
+      res.status(204).end();
+      return;
+    }
     addClient(res, req.user);
   }),
 );

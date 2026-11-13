@@ -14,3 +14,4 @@ export { Drive, default as driveModel } from './drive.js';
 export { Application, default as applicationModel } from './application.js';
 export { Notification, default as notificationModel } from './notification.js';
 export { Session, default as sessionModel } from './session.js';
+export { RealtimeState, default as realtimeModel } from './realtime.js';

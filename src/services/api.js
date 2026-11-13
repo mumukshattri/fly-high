@@ -9,7 +9,8 @@
  *   - sends the session as an HttpOnly cookie (credentials: 'include'), so
  *     there is NO token in localStorage for a script to steal
  *   - parses JSON and turns HTTP errors into `ApiError` with a readable message
- *   - exposes a Server-Sent Events subscriber for live updates
+ *   - exposes a live-update subscriber (SSE in a long-running server, revision
+ *     polling on serverless deployments such as Vercel)
  *   - exposes a raw-body file upload for resumes (no multipart dependency)
  *
  * If the browser cannot reach the API the error is normalised to status 0, so
@@ -128,15 +129,23 @@ export async function uploadFile(path, file) {
   return payload;
 }
 
+/** How often a serverless deployment is asked whether anything changed. */
+const REALTIME_POLL_MS = 4000;
+
 /**
- * Subscribe to server-sent change events.
+ * Subscribe to live change notifications.
  *
- * The stream is authenticated by the same session cookie as the REST API, so
- * no ticket is needed and no token ever appears in a URL.
+ * Two transports, picked by the server so neither side has to be told which
+ * platform it is running on:
  *
- * EventSource reconnects on its own while the connection is merely interrupted
- * (readyState CONNECTING). We only take over when it gives up (CLOSED), which
- * happens on a 401 or after the browser exhausts its retries.
+ *   - SSE (`/api/realtime/events`) for a long-running process - instant, and
+ *     authenticated by the session cookie like every other request
+ *   - polling (`/api/realtime/version`) on Vercel, where a function cannot keep
+ *     a stream open. The endpoint returns a revision number that every
+ *     `broadcast()` advances, so the browser refetches when it moves.
+ *
+ * If SSE closes for any reason the subscriber falls back to polling instead of
+ * retrying forever, so live updates keep working on any deployment.
  *
  * @param {(event: {resource: string, action?: string}) => void} onChange
  * @param {{onStatus?: (connected: boolean) => void}} [options]
@@ -145,25 +154,54 @@ export async function uploadFile(path, file) {
 export function subscribeRealtime(onChange, { onStatus } = {}) {
   let closed = false;
   let source = null;
-  let timer = null;
-  let backoff = 1500;
+  let pollTimer = null;
+  let lastRevision = null;
+  let mode = 'sse';
 
-  const scheduleReconnect = () => {
-    if (closed) return;
-    clearTimeout(timer);
-    timer = setTimeout(connect, backoff);
-    backoff = Math.min(Math.round(backoff * 1.7), 20000);
+  const notify = () => {
+    try {
+      onChange({ resource: 'all', action: 'refresh' });
+    } catch {
+      /* a throwing listener must not stop later notifications */
+    }
   };
 
-  function connect() {
-    if (closed) return;
+  const poll = async () => {
+    if (closed || mode !== 'poll') return;
 
+    try {
+      const info = await request('/realtime/version');
+      if (closed) return;
+      if (lastRevision !== null && info.revision !== lastRevision) notify();
+      lastRevision = info.revision;
+      onStatus?.(true);
+    } catch (error) {
+      if (closed) return;
+      onStatus?.(false);
+      // Signed out: there is nothing to watch until the session returns.
+      if (error?.status === 401) return;
+    }
+
+    if (!closed && mode === 'poll') pollTimer = setTimeout(poll, REALTIME_POLL_MS);
+  };
+
+  const startPolling = () => {
+    if (closed || mode === 'poll') return;
+    mode = 'poll';
+    if (source) {
+      source.close();
+      source = null;
+    }
+    clearTimeout(pollTimer);
+    poll();
+  };
+
+  const startSse = () => {
+    if (closed) return;
+    mode = 'sse';
     source = new EventSource(`${API_BASE}/realtime/events`, { withCredentials: true });
 
-    source.addEventListener('ready', () => {
-      backoff = 1500;
-      onStatus?.(true);
-    });
+    source.addEventListener('ready', () => onStatus?.(true));
 
     source.addEventListener('change', (event) => {
       try {
@@ -176,19 +214,50 @@ export function subscribeRealtime(onChange, { onStatus } = {}) {
     source.addEventListener('error', () => {
       onStatus?.(false);
       // CONNECTING means the browser is already retrying; leave it alone.
+      // CLOSED means it gave up - polling works on every deployment.
       if (source && source.readyState === EventSource.CLOSED) {
         source.close();
         source = null;
-        scheduleReconnect();
+        startPolling();
       }
     });
-  }
+  };
 
-  connect();
+  (async () => {
+    try {
+      const info = await request('/realtime/version');
+      if (closed) return;
+      lastRevision = typeof info.revision === 'number' ? info.revision : null;
+      if (info.transport === 'poll') startPolling();
+      else startSse();
+    } catch (error) {
+      if (closed) return;
+      if (error?.status === 401) {
+        onStatus?.(false);
+        return;
+      }
+      // A server without the version endpoint: keep the original SSE path.
+      startSse();
+    }
+  })();
+
+  /** A backgrounded tab resumes with an immediate check, not a stale wait. */
+  const onVisible = () => {
+    if (!closed && mode === 'poll' && document.visibilityState === 'visible') {
+      clearTimeout(pollTimer);
+      poll();
+    }
+  };
+  if (typeof document !== 'undefined') {
+    document.addEventListener('visibilitychange', onVisible);
+  }
 
   return () => {
     closed = true;
-    clearTimeout(timer);
+    clearTimeout(pollTimer);
     if (source) source.close();
+    if (typeof document !== 'undefined') {
+      document.removeEventListener('visibilitychange', onVisible);
+    }
   };
 }

@@ -89,8 +89,15 @@ export const RESUME_STORAGE_DIR = process.env.RESUME_STORAGE_DIR
   ? path.resolve(process.env.RESUME_STORAGE_DIR)
   : path.join(ROOT_DIR, 'storage', 'resumes');
 
-/** Maximum accepted resume size in bytes (default 5 MB). */
-export const RESUME_MAX_BYTES = Number(process.env.RESUME_MAX_BYTES) || 5 * 1024 * 1024;
+/**
+ * Maximum accepted resume size in bytes.
+ *
+ * 5 MB locally; 4 MB on Vercel, whose serverless request body limit is 4.5 MB.
+ * Setting a smaller limit there means the student gets our readable "resume is
+ * too large" message instead of the platform rejecting the request first.
+ */
+export const RESUME_MAX_BYTES =
+  Number(process.env.RESUME_MAX_BYTES) || (process.env.VERCEL ? 4 * 1024 * 1024 : 5 * 1024 * 1024);
 
 /* ----------------------------- job matching ------------------------------- */
 
