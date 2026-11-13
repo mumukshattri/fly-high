@@ -9,6 +9,8 @@ import StatusBadge from '../../components/StatusBadge';
 import EmptyState from '../../components/EmptyState';
 import LoadingState from '../../components/LoadingState';
 import ApplyConfirmModal from '../../components/ApplyConfirmModal';
+import ExternalJobsPanel from '../../components/ExternalJobsPanel';
+import RecommendedJobs from '../../components/RecommendedJobs';
 import { useCurrentStudent } from '../../hooks/useCurrentStudent';
 import { useData } from '../../context/DataContext';
 import { useToast } from '../../context/ToastContext';
@@ -159,6 +161,16 @@ export default function StudentDashboard() {
           />
         </div>
       </section>
+
+      {/* ------------- 2b. PERSONALISED EXTERNAL RECOMMENDATIONS --------------- */}
+      {/* Matching runs on the server against live Adzuna listings, so this
+          section explains itself and fails soft on its own. */}
+      <RecommendedJobs />
+
+      {/* --------------- 2c. DISCOVER EXTERNAL OPPORTUNITIES ------------------ */}
+      {/* Live Adzuna vacancies. Renders its own loading/error/empty states, so
+          a provider outage never takes the dashboard down with it. */}
+      <ExternalJobsPanel />
 
       {/* --------------------- 3. RECOMMENDED DRIVES + SIDE -------------------- */}
       <div className="two-column">

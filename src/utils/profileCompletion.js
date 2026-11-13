@@ -1,53 +1,168 @@
 /**
  * utils/profileCompletion.js
  * ---------------------------------------------------------------------------
- * Calculates the "Profile completion %" shown on the profile card and in the
- * profile page header. Each item below is worth an equal share of 100%.
+ * Profile completion, shared by the browser and the Express server.
  *
- * We keep this as a pure function (data in -> number out) so it is easy to
- * explain and easy to unit test.
+ * The server imports this exact module (`server/api.js` already imports the
+ * eligibility engine from src/utils), so the percentage a student sees and the
+ * percentage an administrator filters on can never disagree.
+ *
+ * Each section carries a weight and its own checklist. `percent` is the
+ * weighted total, rounded.
  */
 
-const PROFILE_FIELDS = [
-  { key: 'name', label: 'Full name' },
-  { key: 'email', label: 'Email address' },
-  { key: 'phone', label: 'Phone number' },
-  { key: 'rollNumber', label: 'Roll number' },
-  { key: 'university', label: 'University' },
-  { key: 'branch', label: 'Branch' },
-  { key: 'semester', label: 'Semester' },
-  { key: 'cgpa', label: 'CGPA' },
-  { key: 'graduationYear', label: 'Graduation year' },
-  { key: 'about', label: 'About / bio' },
+export const PROFILE_SECTIONS = [
+  {
+    key: 'personal',
+    label: 'Personal information',
+    weight: 15,
+    items: [
+      { key: 'name', label: 'Full name' },
+      { key: 'email', label: 'Email address' },
+      { key: 'phone', label: 'Phone number' },
+      { key: 'university', label: 'University / institution' },
+      { key: 'rollNumber', label: 'Roll number' },
+    ],
+  },
+  {
+    key: 'academic',
+    label: 'Academic information',
+    weight: 25,
+    items: [
+      { key: 'department', label: 'Department' },
+      { key: 'degree', label: 'Degree / programme' },
+      { key: 'currentYear', label: 'Current academic year', numeric: true },
+      { key: 'graduationYear', label: 'Graduation year', numeric: true },
+      { key: 'cgpa', label: 'CGPA', numeric: true },
+    ],
+  },
+  {
+    key: 'skills',
+    label: 'Technical skills',
+    weight: 20,
+    items: [{ key: 'atLeastThreeSkills', label: 'At least 3 technical skills' }],
+  },
+  {
+    key: 'projects',
+    label: 'Projects & experience',
+    weight: 10,
+    items: [{ key: 'projectsOrExperience', label: 'A project or an internship' }],
+  },
+  {
+    key: 'preferences',
+    label: 'Career preferences',
+    weight: 15,
+    items: [
+      { key: 'preferredRoles', label: 'Preferred job roles' },
+      { key: 'preferredLocations', label: 'Preferred locations' },
+    ],
+  },
+  {
+    key: 'resume',
+    label: 'Resume',
+    weight: 15,
+    items: [{ key: 'resume', label: 'Resume upload' }],
+  },
 ];
 
-const hasValue = (value) => {
+const filled = (value) => {
   if (value === null || value === undefined) return false;
   if (typeof value === 'string') return value.trim().length > 0;
-  if (typeof value === 'number') return !Number.isNaN(value);
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0;
+  if (Array.isArray(value)) return value.length > 0;
   return true;
 };
 
-/**
- * @returns {{ percent: number, missing: string[] }}
- *   percent -> 0..100 (rounded)
- *   missing -> friendly labels of the fields still to be filled
- */
-export function getProfileCompletion(student) {
-  if (!student) return { percent: 0, missing: ['Profile not loaded'] };
+/** Every distinct skill on the profile, across all four skill buckets. */
+export function collectStudentSkills(student = {}) {
+  return [
+    ...(student.skills || []),
+    ...(student.programmingLanguages || []),
+    ...(student.frameworks || []),
+    ...(student.databases || []),
+    ...(student.tools || []),
+    ...(student.resumeExtract?.skills || []),
+  ]
+    .map((skill) => String(skill || '').trim())
+    .filter(Boolean);
+}
 
-  const missing = PROFILE_FIELDS.filter((field) => !hasValue(student[field.key])).map((f) => f.label);
-
-  const skills = student.skills || [];
-  if (skills.length < 3) missing.push('At least 3 skills');
-  if (!student.resume || !student.resume.fileName) missing.push('Resume upload');
-
-  // Weight: the 10 fixed fields + 2 extra items (skills, resume) = 12 items
-  const totalItems = PROFILE_FIELDS.length + 2;
-  const completedItems = totalItems - missing.length;
+/** A student document / serialized student -> one boolean per checklist item. */
+function evaluate(student = {}) {
+  const skills = collectStudentSkills(student);
+  const distinctSkills = new Set(skills.map((skill) => skill.toLowerCase()));
+  const preferences = student.preferences || {};
 
   return {
-    percent: Math.round((completedItems / totalItems) * 100),
-    missing,
+    name: filled(student.name),
+    email: filled(student.email),
+    phone: filled(student.phone),
+    university: filled(student.university) && student.university !== 'Not specified',
+    rollNumber: filled(student.rollNumber) || filled(student.enrollmentNumber),
+
+    // `branch` predates `department`, so a legacy profile that only has a
+    // branch still counts as having given its department.
+    department: filled(student.department) || filled(student.branch),
+    degree: filled(student.degree),
+    currentYear: filled(student.currentYear) || filled(student.semester),
+    graduationYear: filled(student.graduationYear),
+    cgpa: filled(student.cgpa),
+
+    atLeastThreeSkills: distinctSkills.size >= 3,
+    projectsOrExperience: (student.projects || []).length > 0 || (student.experiences || []).length > 0,
+
+    preferredRoles: (preferences.roles || []).length > 0,
+    preferredLocations: (preferences.locations || []).length > 0,
+
+    resume: Boolean(student.resume && student.resume.fileName),
   };
 }
+
+/**
+ * @returns {{
+ *   percent: number,
+ *   missing: string[],
+ *   resumeUploaded: boolean,
+ *   sections: Array<{key, label, weight, percent, missing: string[]}>
+ * }}
+ */
+export function getProfileCompletion(student) {
+  if (!student) {
+    return {
+      percent: 0,
+      missing: ['Profile not loaded'],
+      resumeUploaded: false,
+      sections: [],
+    };
+  }
+
+  const state = evaluate(student);
+  const missing = [];
+  let total = 0;
+
+  const sections = PROFILE_SECTIONS.map((section) => {
+    const sectionMissing = section.items.filter((item) => !state[item.key]).map((item) => item.label);
+    const done = section.items.length - sectionMissing.length;
+    const ratio = section.items.length === 0 ? 1 : done / section.items.length;
+    total += ratio * section.weight;
+
+    missing.push(...sectionMissing);
+
+    return {
+      key: section.key,
+      label: section.label,
+      weight: section.weight,
+      percent: Math.round(ratio * 100),
+      missing: sectionMissing,
+    };
+  });
+
+  return {
+    percent: Math.round(total),
+    missing,
+    resumeUploaded: state.resume,
+    sections,
+  };
+}
+
+export default getProfileCompletion;

@@ -48,11 +48,25 @@ export const NAVIGATION = {
         subtitle: 'Academic details, skills and resume',
       },
       {
+        label: 'Profile Setup',
+        path: '/student/onboarding',
+        icon: 'sparkles',
+        title: 'Complete Your Profile',
+        subtitle: 'A guided setup for academics, skills, preferences and your resume',
+      },
+      {
         label: 'Recruitment Drives',
         path: '/student/drives',
         icon: 'briefcase',
         title: 'Recruitment Drives',
         subtitle: 'Open drives from visiting companies with your eligibility status',
+      },
+      {
+        label: 'External Jobs',
+        path: '/student/external-jobs',
+        icon: 'layers',
+        title: 'Discover External Opportunities',
+        subtitle: 'Live vacancies from employers outside the campus drive calendar',
       },
       {
         label: 'My Applications',
@@ -167,7 +181,7 @@ export const NAVIGATION = {
  */
 export function getPageMeta(pathname, role) {
   const config = NAVIGATION[role];
-  if (!config) return { title: 'Placement Portal', subtitle: '' };
+  if (!config) return { title: 'JOB N JOB', subtitle: '' };
 
   const detail = config.detailPages.find((page) => page.test.test(pathname));
   if (detail) return { title: detail.title, subtitle: detail.subtitle };
@@ -180,5 +194,5 @@ export function getPageMeta(pathname, role) {
 
   return item
     ? { title: item.title, subtitle: item.subtitle }
-    : { title: 'Placement Portal', subtitle: '' };
+    : { title: 'JOB N JOB', subtitle: '' };
 }

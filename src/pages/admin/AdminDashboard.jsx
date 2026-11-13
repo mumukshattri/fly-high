@@ -291,8 +291,8 @@ export default function AdminDashboard() {
           <div className="inline-note">
             <Icon name="info" size={16} />
             <span>
-              Demo data is stored in the browser. Use <strong>Reset demo data</strong> in the sidebar to
-              restore the original records.
+              These figures are calculated live from the placement database and refresh
+              automatically whenever a student applies or a recruiter moves a candidate.
             </span>
           </div>
         </div>

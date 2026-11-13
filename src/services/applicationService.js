@@ -1,149 +1,70 @@
 /**
  * services/applicationService.js
  * ===========================================================================
- * APPLICATIONS  (the student -> drive link that companies then review)
+ * APPLICATIONS (the student -> drive link that companies then review)
  * ===========================================================================
  *
  *   getApplications()            ->  GET   /api/applications
  *   getApplicationById(id)       ->  GET   /api/applications/:id
- *   getApplicationsByStudent(id) ->  GET   /api/students/:id/applications
- *   getApplicationsByDrive(id)   ->  GET   /api/drives/:id/applications
+ *   getApplicationsByStudent(id) ->  GET   /api/applications?studentId=...
+ *   getApplicationsByDrive(id)   ->  GET   /api/applications?driveId=...
  *   applyToDrive(payload)        ->  POST  /api/applications
  *   updateStatus(payload)        ->  PATCH /api/applications/:id
  *
- * `applyToDrive` repeats the eligibility check. The UI already disables the
- * button for ineligible students (good UX), but a real backend must always
- * re-validate, because a browser can be tampered with.
+ * The server decides which rows the caller may see from the session, so the
+ * filters below are a convenience for the UI - they can never widen access.
  */
 
-import { checkEligibility } from '../utils/eligibility';
-import { createId, mutate, query, today } from './localDatabase';
+import { api } from './api';
 
-/** GET /api/applications?studentId=&driveId=&status= */
+const toQuery = (params = {}) => {
+  const search = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') search.set(key, value);
+  });
+  const query = search.toString();
+  return query ? `?${query}` : '';
+};
+
+/** GET /api/applications */
 export async function getApplications({ studentId, driveId, status } = {}) {
-  return query((db) =>
-    db.applications.filter((application) => {
-      if (studentId && application.studentId !== studentId) return false;
-      if (driveId && application.driveId !== driveId) return false;
-      if (status && application.status !== status) return false;
-      return true;
-    }),
-  );
+  return api.get(`/applications${toQuery({ studentId, driveId, status })}`);
 }
 
 /** GET /api/applications/:id */
 export async function getApplicationById(applicationId) {
-  return query((db) => db.applications.find((application) => application.id === applicationId) || null);
+  return api.get(`/applications/${encodeURIComponent(applicationId)}`);
 }
 
-/** GET /api/students/:id/applications */
+/** GET /api/applications?studentId= */
 export async function getApplicationsByStudent(studentId) {
   return getApplications({ studentId });
 }
 
-/** GET /api/drives/:id/applications */
+/** GET /api/applications?driveId= */
 export async function getApplicationsByDrive(driveId) {
   return getApplications({ driveId });
 }
 
 /** Used to disable the Apply button on the drives page. */
 export async function hasApplied(studentId, driveId) {
-  return query((db) =>
-    db.applications.some(
-      (application) => application.studentId === studentId && application.driveId === driveId,
-    ),
-  );
+  const rows = await getApplications({ studentId, driveId });
+  return rows.some((row) => row.studentId === studentId && row.driveId === driveId);
 }
 
 /**
  * POST /api/applications
- * @param {{studentId:string, driveId:string}} payload
- * @returns the created application (status = 'Applied')
+ * The server re-runs the eligibility rules and the duplicate check, then
+ * creates the student's notification.
  */
-export async function applyToDrive({ studentId, driveId }) {
-  return mutate((db) => {
-    const student = db.students.find((item) => item.id === studentId);
-    const drive = db.drives.find((item) => item.id === driveId);
-
-    if (!student) throw new Error('Student not found. Please log in again.');
-    if (!drive) throw new Error('This recruitment drive is no longer available.');
-
-    // 1. No duplicate applications for the same drive.
-    const alreadyApplied = db.applications.some(
-      (application) => application.studentId === studentId && application.driveId === driveId,
-    );
-    if (alreadyApplied) throw new Error('You have already applied for this drive.');
-
-    // 2. Server-side eligibility re-check.
-    const eligibility = checkEligibility(student, drive);
-    if (!eligibility.eligible) {
-      throw new Error(`You are not eligible for this drive. ${eligibility.reasons[0] || ''}`.trim());
-    }
-
-    const application = {
-      id: createId('app'),
-      driveId,
-      studentId,
-      status: 'Applied',
-      appliedOn: today(),
-      lastUpdated: today(),
-      recruiterNote: '',
-      statusHistory: [
-        { status: 'Applied', date: today(), note: 'Application submitted by the student.' },
-      ],
-    };
-
-    db.applications.unshift(application);
-
-    // The backend would raise this notification automatically.
-    db.notifications.unshift({
-      id: createId('ntf'),
-      studentId,
-      type: 'success',
-      title: 'Application submitted',
-      message: `Your application for ${drive.role} was submitted successfully.`,
-      date: today(),
-      read: false,
-    });
-
-    return application;
-  });
+export async function applyToDrive({ driveId }) {
+  return api.post('/applications', { driveId });
 }
 
 /**
  * PATCH /api/applications/:id
- * Used by the company dashboard when a recruiter shortlists / rejects a student.
- * @param {{applicationId:string, status:string, note?:string}} payload
+ * Only the company that owns the drive (or an admin) may move a candidate.
  */
 export async function updateApplicationStatus({ applicationId, status, note = '' }) {
-  return mutate((db) => {
-    const application = db.applications.find((item) => item.id === applicationId);
-    if (!application) throw new Error('Application not found.');
-
-    application.status = status;
-    application.lastUpdated = today();
-    if (note) application.recruiterNote = note;
-    application.statusHistory.push({
-      status,
-      date: today(),
-      note: note || `Status changed to ${status} by the recruiter.`,
-    });
-
-    // Notify the student about the status change.
-    const drive = db.drives.find((item) => item.id === application.driveId);
-    const company = drive ? db.companies.find((item) => item.id === drive.companyId) : null;
-    db.notifications.unshift({
-      id: createId('ntf'),
-      studentId: application.studentId,
-      type: status === 'Rejected' ? 'danger' : status === 'Selected' ? 'success' : 'info',
-      title: `Application ${status}`,
-      message: `${company ? company.name : 'The company'} updated your application${
-        drive ? ` for ${drive.role}` : ''
-      } to "${status}".`,
-      date: today(),
-      read: false,
-    });
-
-    return application;
-  });
+  return api.patch(`/applications/${encodeURIComponent(applicationId)}`, { status, note });
 }

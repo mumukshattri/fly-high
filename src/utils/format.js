@@ -44,6 +44,55 @@ export function initials(name = '') {
     .join('');
 }
 
+/**
+ * '2026-11-05T09:12:00Z' -> '2 days ago' / 'Today'.
+ * Used by external job cards, whose timestamps are real ISO instants from the
+ * provider rather than the plain YYYY-MM-DD dates used internally.
+ */
+export function relativeTime(isoInstant) {
+  if (!isoInstant) return null;
+  const time = new Date(isoInstant).getTime();
+  if (Number.isNaN(time)) return null;
+
+  const diffMinutes = Math.round((Date.now() - time) / 60000);
+  if (diffMinutes < 60) return diffMinutes <= 1 ? 'Just now' : `${diffMinutes} minutes ago`;
+
+  const diffHours = Math.round(diffMinutes / 60);
+  if (diffHours < 24) return diffHours === 1 ? '1 hour ago' : `${diffHours} hours ago`;
+
+  const diffDays = Math.round(diffHours / 24);
+  if (diffDays < 30) return diffDays === 1 ? 'Yesterday' : `${diffDays} days ago`;
+
+  const date = new Date(isoInstant);
+  return `${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
+}
+
+/**
+ * A salary band in the provider's own currency, e.g. '₹12,00,000 - ₹18,00,000'.
+ * Returns null when the provider sent no numbers - never a guess.
+ */
+export function formatSalary(salary) {
+  if (!salary) return null;
+  const { min, max, currency } = salary;
+  const format = (value) => {
+    if (!value) return null;
+    try {
+      return new Intl.NumberFormat(currency === 'INR' ? 'en-IN' : 'en-US', {
+        style: 'currency',
+        currency: currency || 'INR',
+        maximumFractionDigits: 0,
+      }).format(value);
+    } catch {
+      return String(value);
+    }
+  };
+
+  const low = format(min);
+  const high = format(max);
+  if (low && high && min !== max) return `${low} - ${high}`;
+  return low || high || null;
+}
+
 /** Turns an enum-ish string into a CSS-safe class suffix: 'Under Review' -> 'under-review' */
 export function slugify(value = '') {
   return String(value).trim().toLowerCase().replace(/\s+/g, '-');

@@ -1,30 +1,36 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import * as applicationService from '../services/applicationService';
+import * as adminService from '../services/adminService';
 import * as driveService from '../services/driveService';
 import * as studentService from '../services/studentService';
-import { resetDatabase } from '../services/localDatabase';
+import { subscribeRealtime } from '../services/api';
+import { useAuth } from './AuthContext';
 
 /**
  * DataContext
  * ---------------------------------------------------------------------------
- * This is our small "frontend database" - all five collections are loaded once
- * from the services layer and kept in React state so pages can read them
- * synchronously without re-fetching on every navigation.
+ * All five collections are loaded from the MongoDB backend and kept in React
+ * state so pages can read them synchronously without refetching on navigation.
  *
  *   students | companies | drives | applications | notifications
  *
- * The pattern used here is deliberately simple and works for any backend:
+ * The rules that matter for correctness and security:
  *
- *   1. on mount            -> GET the collections (loading = true)
- *   2. a page calls an     -> POST / PATCH through the service layer
- *     action
- *   3. when it succeeds    -> reload the collections (stay in sync)
+ *   1. NOTHING loads without an authenticated user. Every request carries the
+ *      HttpOnly session cookie and the SERVER decides what that account may
+ *      read (a student gets their own rows, a recruiter gets their own
+ *      company's rows, an admin gets everything). The browser never receives a
+ *      full private payload and filters it down.
+ *   2. Signing out - or a refused session - empties the state immediately, so a
+ *      second person on the same browser never sees the previous account's data.
+ *   3. Live updates arrive over SSE as "something changed". We refetch through
+ *      the authenticated REST API, which keeps every payload correctly scoped;
+ *      events themselves carry no personal data.
+ *   4. A failed load is reported in `error`; a 401 means the session is over and
+ *      signs the user out instead of looping on a dead cookie.
  *
- * No Redux is needed because there is exactly one place (this provider) that
- * owns the data, and the data set is tiny.
- *
- * NOTE: `state` shape is also what the selector functions in utils/selectors.js
- * expect, e.g. getStudentApplications(studentId, state).
+ * `state` is the shape the selectors in utils/selectors.js expect, e.g.
+ * getStudentApplications(studentId, state).
  */
 const DataContext = createContext(null);
 
@@ -36,44 +42,108 @@ const EMPTY_STATE = {
   notifications: [],
 };
 
-export function DataProvider({ children }) {
-  const [state, setState] = useState(EMPTY_STATE);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false); // true while a write is in flight
-  const [error, setError] = useState(null);
+/** Coalesce bursts of events (one shortlist notifies several clients at once). */
+const REALTIME_DEBOUNCE_MS = 250;
 
-  /**
-   * Loads every collection in parallel (like Promise.all of four fetch calls).
-   * @param {{silent?: boolean}} options - silent keeps the page visible after a write
-   */
-  const refresh = useCallback(async ({ silent = false } = {}) => {
-    if (!silent) setLoading(true);
+export function DataProvider({ children }) {
+  const { user, logout } = useAuth();
+
+  const [state, setState] = useState(EMPTY_STATE);
+  const [loading, setLoading] = useState(false); // first load for the current user
+  const [saving, setSaving] = useState(false); // a write is in flight
+  const [error, setError] = useState(null);
+  const [realtimeConnected, setRealtimeConnected] = useState(false);
+
+  // Lets an in-flight response be discarded if the account changed meanwhile.
+  const activeUserId = useRef(null);
+  activeUserId.current = user?.id || null;
+
+  const clear = useCallback(() => {
+    setState(EMPTY_STATE);
     setError(null);
-    try {
-      const [students, companies, drives, applications, notifications] = await Promise.all([
-        studentService.getStudents(),
-        driveService.getCompanies(),
-        driveService.getDrives(),
-        applicationService.getApplications(),
-        studentService.getNotifications(), // no id -> every notification
-      ]);
-      setState({ students, companies, drives, applications, notifications });
-    } catch (loadError) {
-      setError(loadError.message || 'Could not load data from the server.');
-    } finally {
-      if (!silent) setLoading(false);
-    }
+    setLoading(false);
   }, []);
 
-  useEffect(() => {
-    refresh();
-  }, [refresh]);
-
   /**
-   * Helper used by every write action below:
-   * run the API call -> refresh quietly -> return the API result.
-   * The caller can still `await` it to know when the write finished.
+   * Load every collection the current role is allowed to read.
+   * @param {{silent?: boolean}} options - silent keeps the page visible after a write
    */
+  const refresh = useCallback(
+    async ({ silent = false } = {}) => {
+      if (!user) {
+        clear();
+        return;
+      }
+
+      if (!silent) setLoading(true);
+
+      try {
+        const [students, companies, drives, applications, notifications] = await Promise.all([
+          studentService.getStudents(),
+          driveService.getCompanies(),
+          driveService.getDrives(),
+          applicationService.getApplications(),
+          studentService.getNotifications(),
+        ]);
+
+        // A response belonging to a session we have already left is dropped.
+        if (activeUserId.current !== user.id) return;
+
+        setState({ students, companies, drives, applications, notifications });
+        setError(null);
+      } catch (loadError) {
+        if (activeUserId.current !== user.id) return;
+
+        if (loadError.status === 401) {
+          // Expired or revoked session: stop pretending we are signed in.
+          await logout().catch(() => {});
+          clear();
+          return;
+        }
+
+        setError(loadError.message || 'Could not load data from the server.');
+      } finally {
+        if (!silent) setLoading(false);
+      }
+    },
+    [user, logout, clear],
+  );
+
+  // Load on sign-in, clear on sign-out.
+  useEffect(() => {
+    if (!user) {
+      clear();
+      return;
+    }
+    refresh();
+  }, [user, refresh, clear]);
+
+  // Live updates, for a signed-in user only.
+  useEffect(() => {
+    if (!user) {
+      setRealtimeConnected(false);
+      return undefined;
+    }
+
+    let timer = null;
+    const unsubscribe = subscribeRealtime(
+      () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          refresh({ silent: true });
+        }, REALTIME_DEBOUNCE_MS);
+      },
+      { onStatus: setRealtimeConnected },
+    );
+
+    return () => {
+      clearTimeout(timer);
+      unsubscribe();
+      setRealtimeConnected(false);
+    };
+  }, [user, refresh]);
+
+  /** Write -> refetch -> return the API result. */
   const runWrite = useCallback(
     async (writeAction) => {
       setSaving(true);
@@ -81,43 +151,48 @@ export function DataProvider({ children }) {
         const result = await writeAction();
         await refresh({ silent: true });
         return result;
+      } catch (writeError) {
+        if (writeError.status === 401) {
+          await logout().catch(() => {});
+          clear();
+        }
+        throw writeError;
       } finally {
         setSaving(false);
       }
     },
-    [refresh],
+    [refresh, logout, clear],
   );
 
   /* ----------------------------- Student actions ----------------------------- */
 
-  /** POST /api/applications - also creates a notification. */
+  /** POST /api/applications - the server revalidates eligibility and duplicates. */
   const applyToDrive = useCallback(
-    ({ studentId, driveId }) => runWrite(() => applicationService.applyToDrive({ studentId, driveId })),
+    ({ driveId }) => runWrite(() => applicationService.applyToDrive({ driveId })),
     [runWrite],
   );
 
-  /** PUT /api/students/profile */
+  /** PATCH /api/students/me/profile - the id is kept for call-site compatibility. */
   const updateProfile = useCallback(
-    (studentId, updates) =>
-      runWrite(() => studentService.updateStudentProfile(studentId, updates)),
+    (studentId, updates) => runWrite(() => studentService.updateStudentProfile(studentId, updates)),
     [runWrite],
   );
 
-  /** POST /api/students/resume (metadata only in the demo) */
+  /** POST /api/students/me/resume - sends the actual File, not just its name. */
   const uploadResume = useCallback(
-    (studentId, fileMeta) => runWrite(() => studentService.uploadResume(studentId, fileMeta)),
+    (studentId, file) => runWrite(() => studentService.uploadResumeFile(file)),
     [runWrite],
   );
 
-  /* ----------------------------- Company actions ----------------------------- */
+  /* ------------------------------ Company actions ----------------------------- */
 
-  /** POST /api/drives */
+  /** POST /api/drives - refused with 403 until an admin verifies the company. */
   const createDrive = useCallback(
     (payload) => runWrite(() => driveService.createDrive(payload)),
     [runWrite],
   );
 
-  /** PATCH /api/drives/:id */
+  /** PATCH /api/drives/:id { status: 'Closed' } */
   const closeDrive = useCallback(
     (driveId) => runWrite(() => driveService.closeDrive(driveId)),
     [runWrite],
@@ -137,17 +212,18 @@ export function DataProvider({ children }) {
   );
 
   const markAllNotificationsRead = useCallback(
-    (studentId) => runWrite(() => studentService.markAllNotificationsRead(studentId)),
+    () => runWrite(() => studentService.markAllNotificationsRead()),
     [runWrite],
   );
 
-  /* --------------------------------- Admin / demo -------------------------------- */
+  /* ----------------------------------- Admin ----------------------------------- */
 
-  /** Deletes the localStorage database and reloads the original mock data. */
-  const resetDemoData = useCallback(async () => {
-    resetDatabase();
-    await refresh();
-  }, [refresh]);
+  /** PATCH /api/admin/companies/:id { verified } */
+  const setCompanyVerification = useCallback(
+    (companyId, verified) =>
+      runWrite(() => adminService.setCompanyVerification(companyId, verified)),
+    [runWrite],
+  );
 
   const value = useMemo(
     () => ({
@@ -157,6 +233,7 @@ export function DataProvider({ children }) {
       loading,
       saving,
       error,
+      realtimeConnected,
       // actions
       refresh,
       applyToDrive,
@@ -167,13 +244,14 @@ export function DataProvider({ children }) {
       updateApplicationStatus,
       markNotificationRead,
       markAllNotificationsRead,
-      resetDemoData,
+      setCompanyVerification,
     }),
     [
       state,
       loading,
       saving,
       error,
+      realtimeConnected,
       refresh,
       applyToDrive,
       updateProfile,
@@ -183,7 +261,7 @@ export function DataProvider({ children }) {
       updateApplicationStatus,
       markNotificationRead,
       markAllNotificationsRead,
-      resetDemoData,
+      setCompanyVerification,
     ],
   );
 

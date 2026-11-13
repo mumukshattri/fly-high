@@ -25,7 +25,7 @@ import { getPageMeta, SEARCH_ROUTE } from '../config/navigation';
  */
 export default function DashboardLayout({ role }) {
   const { user, logout } = useAuth();
-  const { notifications, resetDemoData } = useData();
+  const { notifications } = useData();
   const { showToast } = useToast();
   const navigate = useNavigate();
   const location = useLocation();
@@ -54,11 +54,6 @@ export default function DashboardLayout({ role }) {
     navigate(`${SEARCH_ROUTE[role]}?q=${encodeURIComponent(term)}`);
   };
 
-  const handleReset = async () => {
-    await resetDemoData();
-    showToast('Demo data restored to its original state.', 'info');
-  };
-
   return (
     <div className="app-shell">
       <Sidebar
@@ -68,7 +63,6 @@ export default function DashboardLayout({ role }) {
         open={sidebarOpen}
         onClose={() => setSidebarOpen(false)}
         onLogout={handleLogout}
-        onResetDemoData={handleReset}
       />
 
       {/* Dark backdrop behind the sidebar on tablets/phones */}

@@ -12,7 +12,7 @@ import { NAVIGATION, ROLE_LABELS } from '../config/navigation';
  * NavLink (from React Router) adds the `is-active` class automatically when the
  * current URL matches, which is how the active menu item is highlighted.
  */
-export default function Sidebar({ role, user, unreadCount = 0, open, onClose, onLogout, onResetDemoData }) {
+export default function Sidebar({ role, user, unreadCount = 0, open, onClose, onLogout }) {
   const config = NAVIGATION[role];
   if (!config) return null;
 
@@ -24,7 +24,7 @@ export default function Sidebar({ role, user, unreadCount = 0, open, onClose, on
           <Icon name="graduation" size={19} />
         </div>
         <div className="sidebar__brand-text">
-          <span className="sidebar__brand-title">Placement Portal</span>
+          <span className="sidebar__brand-title">JOB N JOB</span>
           <span className="sidebar__brand-sub">Campus Recruitment</span>
         </div>
         {/* Only visible on tablet/mobile, where the sidebar is an overlay. */}
@@ -68,11 +68,6 @@ export default function Sidebar({ role, user, unreadCount = 0, open, onClose, on
         <button type="button" className="sidebar__logout" onClick={onLogout}>
           <Icon name="logout" size={16} />
           Logout
-        </button>
-
-        {/* Demo helper: restores the original mock data. */}
-        <button type="button" className="sidebar__reset" onClick={onResetDemoData}>
-          Reset demo data
         </button>
       </div>
     </aside>

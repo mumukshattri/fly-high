@@ -9,7 +9,7 @@ import Button from '../../components/Button';
 import { useData } from '../../context/DataContext';
 import { enrichApplication } from '../../utils/selectors';
 import { formatDate } from '../../utils/format';
-import { APPLICATION_STATUSES } from '../../data/mockApplications';
+import { APPLICATION_STATUSES } from '../../config/pipeline';
 
 /**
  * pages/admin/AdminApplications.jsx

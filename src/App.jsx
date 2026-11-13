@@ -13,12 +13,15 @@ import { ProtectedRoute, RedirectIfAuthenticated } from './components/ProtectedR
 // Auth pages
 import Login from './pages/Login';
 import Register from './pages/Register';
+import Activate from './pages/Activate';
 import NotFound from './pages/NotFound';
 
 // Student pages
 import StudentDashboard from './pages/student/StudentDashboard';
+import Onboarding from './pages/student/Onboarding';
 import StudentProfile from './pages/student/StudentProfile';
 import StudentDrives from './pages/student/StudentDrives';
+import ExternalJobs from './pages/student/ExternalJobs';
 import DriveDetails from './pages/student/DriveDetails';
 import StudentApplications from './pages/student/StudentApplications';
 import ApplicationDetails from './pages/student/ApplicationDetails';
@@ -88,6 +91,13 @@ export default function App() {
                 }
               />
 
+              {/*
+                Activation for CSV-imported students. Public on purpose: the
+                student has no password yet, and the one-time token in the URL
+                is the credential.
+              */}
+              <Route path="/activate" element={<Activate />} />
+
               {/* --------------------------- student ---------------------------- */}
               <Route
                 path="/student"
@@ -99,9 +109,11 @@ export default function App() {
               >
                 <Route index element={<Navigate to="dashboard" replace />} />
                 <Route path="dashboard" element={<StudentDashboard />} />
+                <Route path="onboarding" element={<Onboarding />} />
                 <Route path="profile" element={<StudentProfile />} />
                 <Route path="drives" element={<StudentDrives />} />
                 <Route path="drives/:driveId" element={<DriveDetails />} />
+                <Route path="external-jobs" element={<ExternalJobs />} />
                 <Route path="applications" element={<StudentApplications />} />
                 <Route path="applications/:applicationId" element={<ApplicationDetails />} />
                 <Route path="notifications" element={<StudentNotifications />} />

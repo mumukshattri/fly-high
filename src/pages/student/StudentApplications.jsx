@@ -8,25 +8,23 @@ import SearchBar from '../../components/SearchBar';
 import EmptyState from '../../components/EmptyState';
 import LoadingState from '../../components/LoadingState';
 import Avatar from '../../components/Avatar';
+import StatusTimeline from '../../components/StatusTimeline';
 import { useCurrentStudent } from '../../hooks/useCurrentStudent';
 import { useData } from '../../context/DataContext';
 import { getStudentApplications } from '../../utils/selectors';
 import { formatDate } from '../../utils/format';
-import { APPLICATION_STATUSES } from '../../data/mockApplications';
+import { APPLICATION_STATUSES } from '../../config/pipeline';
 
 /**
  * pages/student/StudentApplications.jsx
  * ===========================================================================
  * MY APPLICATIONS  (/student/applications)
  * ===========================================================================
- * The tracking page. One row per application, with:
- *   Company | Role | Applied Date | Status | Last Updated | Action
- *
- * Filtering by status is done with the tab strip, which is again derived state:
- * the same array is filtered differently depending on `activeStatus`.
- *
- * Every status is colour coded by <StatusBadge /> so the student can scan the
- * list quickly (the "different visual indicators for each status" requirement).
+ * The tracking page. One card per application showing the company, the role,
+ * the current status and a timeline built from the application's own
+ * `statusHistory` - the same audit trail the recruiter writes when they move a
+ * candidate forward. Realtime events make the list refresh on its own, and the
+ * history is stored in MongoDB so it survives a page reload.
  */
 export default function StudentApplications() {
   const student = useCurrentStudent();
@@ -60,7 +58,7 @@ export default function StudentApplications() {
     <>
       <PageHeader
         title="My Applications"
-        subtitle="Every drive you applied to, with the latest status from the recruiter."
+        subtitle="Every drive you applied to, with the timeline of every status the recruiter has recorded."
       >
         <Button variant="outline" icon="briefcase" onClick={() => navigate('/student/drives')}>
           Apply to more drives
@@ -92,7 +90,7 @@ export default function StudentApplications() {
         </div>
       </div>
 
-      {/* ------------------------------ table ------------------------------ */}
+      {/* --------------------------- application cards --------------------------- */}
       {visibleApplications.length === 0 ? (
         <EmptyState
           icon="file-text"
@@ -121,57 +119,54 @@ export default function StudentApplications() {
           )}
         </EmptyState>
       ) : (
-        <div className="table-wrap">
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Company</th>
-                <th>Role</th>
-                <th>Applied Date</th>
-                <th>Status</th>
-                <th>Last Updated</th>
-                <th style={{ textAlign: 'right' }}>Action</th>
-              </tr>
-            </thead>
-            <tbody>
-              {visibleApplications.map((application) => (
-                <tr key={application.id}>
-                  <td>
-                    <div className="row gap-8">
-                      <Avatar name={application.companyName} size="sm" square />
-                      <div>
-                        <div className="cell-primary">{application.companyName}</div>
-                        <div className="cell-sub">{application.company?.location || '—'}</div>
-                      </div>
-                    </div>
-                  </td>
-                  <td>
-                    <div className="cell-primary" style={{ fontWeight: 500 }}>
+        <div className="col gap-16">
+          {visibleApplications.map((application) => (
+            <article className="card card--pad application-track" key={application.id}>
+              <div className="row-between wrap gap-12">
+                <div className="row gap-12">
+                  <Avatar name={application.companyName} size="md" square />
+                  <div>
+                    <div className="cell-primary">{application.companyName}</div>
+                    <div className="cell-sub">
                       {application.role}
+                      {application.drive?.package ? ` \u00b7 ${application.drive.package}` : ''}
                     </div>
-                    <div className="cell-sub">{application.drive?.package || '—'}</div>
-                  </td>
-                  <td className="nowrap">{formatDate(application.appliedOn)}</td>
-                  <td>
-                    <StatusBadge status={application.status} />
-                  </td>
-                  <td className="nowrap muted">{formatDate(application.lastUpdated)}</td>
-                  <td>
-                    <div className="data-table__actions">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        icon="eye"
-                        onClick={() => navigate(`/student/applications/${application.id}`)}
-                      >
-                        Track
-                      </Button>
+                    <div className="row gap-12 wrap mt-4">
+                      <span className="text-xs muted">
+                        <Icon name="calendar" size={12} /> Applied {formatDate(application.appliedOn)}
+                      </span>
+                      <span className="text-xs muted">
+                        <Icon name="refresh" size={12} /> Updated {formatDate(application.lastUpdated)}
+                      </span>
                     </div>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                  </div>
+                </div>
+
+                <div className="row gap-8 wrap">
+                  <StatusBadge status={application.status} />
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    icon="eye"
+                    onClick={() => navigate(`/student/applications/${application.id}`)}
+                  >
+                    Details
+                  </Button>
+                </div>
+              </div>
+
+              <div className="application-track__timeline">
+                <StatusTimeline application={application} drive={application.drive} compact />
+              </div>
+
+              {(application.statusHistory || []).length === 0 ? (
+                <p className="text-xs muted mt-8">
+                  No recruiter changes recorded yet. The timeline fills in as soon as the company
+                  reviews your application.
+                </p>
+              ) : null}
+            </article>
+          ))}
         </div>
       )}
 
@@ -199,7 +194,6 @@ export default function StudentApplications() {
           </div>
         </section>
       ) : null}
-
     </>
   );
 }

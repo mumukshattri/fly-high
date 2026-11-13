@@ -1,79 +1,79 @@
+import { useMemo } from 'react';
 import Icon from './Icon';
-import { PIPELINE_STAGES } from '../data/mockApplications';
-import { formatDate } from '../utils/format';
 import StatusBadge from './StatusBadge';
+import { formatDate } from '../utils/format';
+import { buildApplicationTimeline } from '../utils/applicationTimeline';
 
 /**
  * components/StatusTimeline.jsx
  * ---------------------------------------------------------------------------
- * The visual progress tracker used on the application details page.
+ * Progress tracker for one application.
  *
- *   Applied  ->  Under Review  ->  Shortlisted  ->  Selected
+ *   Applied -> Application reviewed -> Shortlisted -> [Interview scheduled] -> Selected
  *
- * A "Rejected" application leaves the main pipeline, so in that case we show
- * only the stages it actually reached and add a red Rejected step at the end.
+ * "Interview scheduled" only appears when the drive has a published date and
+ * the application actually reached Shortlisted; "Rejected" replaces Selected
+ * when the application was rejected. Every date and note comes from
+ * `application.statusHistory` (written by the recruiter's PATCH request), so
+ * nothing on this timeline is decorative. Stages with no recorded timestamp say
+ * so instead of showing a made-up date.
  *
- * The component reads `application.statusHistory` (the audit trail created by
- * applicationService.updateApplicationStatus) so the dates and recruiter notes
- * next to each stage are real data, not decoration.
+ * `compact` renders the same data as a horizontal stepper for list pages.
  */
+export default function StatusTimeline({ application, drive = null, compact = false }) {
+  const timeline = useMemo(
+    () => buildApplicationTimeline(application || {}, drive),
+    [application, drive],
+  );
 
-const STAGE_ICONS = {
-  Applied: 'send',
-  'Under Review': 'clock',
-  Shortlisted: 'star',
-  Selected: 'check-circle',
-  Rejected: 'x',
-};
-
-/** i-th stage met in the history? */
-const findHistoryEntry = (history, status) =>
-  [...history].reverse().find((entry) => entry.status === status);
-
-export default function StatusTimeline({ application }) {
   if (!application) return null;
 
-  const history = application.statusHistory || [];
-  const reachedStatuses = history.map((entry) => entry.status);
-  const currentStatus = application.status;
-  const isRejected = currentStatus === 'Rejected';
+  const { stages, currentStatus } = timeline;
 
-  // Build the list of stages to draw.
-  let stages = PIPELINE_STAGES;
-  if (isRejected) {
-    const reached = PIPELINE_STAGES.filter((stage) => reachedStatuses.includes(stage));
-    stages = [...reached, 'Rejected'];
+  if (compact) {
+    return (
+      <ol className="timeline-compact" aria-label="Application timeline">
+        {stages.map((stage) => (
+          <li className={`timeline-compact__step is-${stage.state}`} key={stage.key}>
+            <span className="timeline-compact__marker">
+              {stage.state === 'done' ? (
+                <Icon name="check" size={11} strokeWidth={3} />
+              ) : (
+                <Icon name={stage.icon} size={12} />
+              )}
+            </span>
+            <span className="timeline-compact__body">
+              <span className="timeline-compact__label">{stage.label}</span>
+              <span className="timeline-compact__date">
+                {stage.date
+                  ? formatDate(stage.date)
+                  : stage.state === 'pending'
+                    ? 'Pending'
+                    : 'Not recorded'}
+              </span>
+            </span>
+          </li>
+        ))}
+      </ol>
+    );
   }
-
-  const currentIndex = stages.indexOf(currentStatus);
 
   return (
     <div>
-      <div className="row-between mb-16">
+      <div className="row-between mb-16 wrap gap-8">
         <span className="text-sm muted">Current status</span>
         <StatusBadge status={currentStatus} />
       </div>
 
       <ol className="timeline">
-        {stages.map((stage, index) => {
-          const entry = findHistoryEntry(history, stage);
-          const isCurrent = index === currentIndex;
-          const isDone = index < currentIndex;
-          const isRejectedStage = isRejected && stage === 'Rejected';
-
-          const stateClass = isRejectedStage
-            ? 'is-rejected'
-            : isCurrent
-              ? 'is-current'
-              : isDone
-                ? 'is-done'
-                : '';
+        {stages.map((stage) => {
+          const isDone = stage.state === 'done';
 
           return (
-            <li className={`timeline__step ${stateClass}`} key={stage}>
+            <li className={`timeline__step is-${stage.state}`} key={stage.key}>
               <span className="timeline__marker">
                 <Icon
-                  name={isDone ? 'check' : STAGE_ICONS[stage] || 'circle'}
+                  name={isDone ? 'check' : stage.icon}
                   size={14}
                   strokeWidth={isDone ? 3 : 2}
                 />
@@ -82,26 +82,33 @@ export default function StatusTimeline({ application }) {
 
               <div className="timeline__content">
                 <div className="row gap-8 wrap">
-                  <span className="timeline__label">{stage}</span>
-                  {isCurrent ? (
+                  <span className="timeline__label">{stage.label}</span>
+                  {stage.state === 'current' ? (
                     <span className="badge badge--info text-xs">Current stage</span>
                   ) : null}
+                  {stage.isInterview ? (
+                    <span className="badge badge--neutral text-xs">From drive data</span>
+                  ) : null}
                 </div>
-                {entry ? (
-                  <div className="timeline__date">
-                    {formatDate(entry.date)}
-                    {entry.note ? ` - ${entry.note}` : ''}
-                  </div>
-                ) : (
-                  <div className="timeline__date">Pending</div>
-                )}
+
+                <div className="timeline__date">
+                  {stage.date
+                    ? formatDate(stage.date)
+                    : stage.state === 'pending'
+                      ? 'Pending'
+                      : stage.state === 'skipped'
+                        ? 'Not recorded'
+                        : 'Timestamp not recorded'}
+                </div>
+
+                {stage.note ? <div className="timeline__note">{stage.note}</div> : null}
               </div>
             </li>
           );
         })}
       </ol>
 
-      {isRejected && application.recruiterNote ? (
+      {timeline.isRejected && application.recruiterNote ? (
         <div className="inline-note inline-note--warning mt-16">
           <Icon name="info" size={16} />
           <span>

@@ -25,3 +25,6 @@ yarn-error.log*
 pnpm-debug.log*
 logs/
 *.log
+
+# private resume storage (never committed)
+storage/

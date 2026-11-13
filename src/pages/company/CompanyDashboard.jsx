@@ -14,7 +14,7 @@ import { useData } from '../../context/DataContext';
 import { useToast } from '../../context/ToastContext';
 import { getCompanyApplications, getCompanyDrives } from '../../utils/selectors';
 import { formatDate, deadlineLabel } from '../../utils/format';
-import { PIPELINE_STAGES } from '../../data/mockApplications';
+import { PIPELINE_STAGES } from '../../config/pipeline';
 
 /**
  * pages/company/CompanyDashboard.jsx

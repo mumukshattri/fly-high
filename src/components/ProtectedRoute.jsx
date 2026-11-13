@@ -53,7 +53,7 @@ export function AppLoading() {
         <div className="app-loading__logo">
           <Icon name="graduation" size={24} />
         </div>
-        <span className="app-loading__text">Loading Placement Portal...</span>
+        <span className="app-loading__text">Loading JOB N JOB...</span>
       </div>
     </div>
   );

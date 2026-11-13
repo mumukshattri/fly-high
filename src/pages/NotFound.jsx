@@ -22,7 +22,7 @@ export default function NotFound() {
         </div>
         <h1 className="auth-card__title">Page not found</h1>
         <p className="auth-card__sub">
-          The page you are looking for does not exist in the Placement Portal.
+          The page you are looking for does not exist in JOB N JOB.
         </p>
         <Button
           variant="primary"

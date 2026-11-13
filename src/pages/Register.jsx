@@ -106,7 +106,11 @@ export default function Register() {
           : 'Company account created. You can now publish a recruitment drive.',
         'success',
       );
-      navigate(HOME_ROUTE[user.role], { replace: true });
+      // A new student goes straight into the guided profile setup; a recruiter
+      // keeps landing on its dashboard.
+      navigate(user.role === 'student' ? '/student/onboarding' : HOME_ROUTE[user.role], {
+        replace: true,
+      });
     } catch (error) {
       setServerError(error.message || 'Registration failed. Please try again.');
     } finally {
@@ -123,7 +127,7 @@ export default function Register() {
             <Icon name="graduation" size={22} />
           </div>
           <div>
-            <div className="auth-brand__name">Placement Portal</div>
+            <div className="auth-brand__name">JOB N JOB</div>
             <div className="auth-brand__sub">Campus Recruitment Management System</div>
           </div>
         </div>

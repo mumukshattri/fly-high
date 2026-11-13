@@ -4,7 +4,9 @@ import PageHeader from '../../components/PageHeader';
 import SearchBar from '../../components/SearchBar';
 import EmptyState from '../../components/EmptyState';
 import LoadingState from '../../components/LoadingState';
+import Button from '../../components/Button';
 import { useData } from '../../context/DataContext';
+import { useToast } from '../../context/ToastContext';
 import { getCompanyRows } from '../../utils/selectors';
 import { formatDate } from '../../utils/format';
 
@@ -14,11 +16,36 @@ import { formatDate } from '../../utils/format';
  * The list of recruiters registered with the placement cell, plus how many
  * drives and applications each one generated. The admin uses this to see which
  * companies are actually engaging with the campus.
+ *
+ * VERIFICATION GATE: a newly registered company has `verified: false` and the
+ * backend refuses its POST /api/drives with a 403 until the placement cell
+ * approves it here, so this button is the only way a recruiter can start
+ * publishing drives.
  */
 export default function AdminCompanies() {
   const data = useData();
-  const { loading } = data;
+  const { loading, setCompanyVerification } = data;
+  const { showToast } = useToast();
   const [search, setSearch] = useState('');
+  const [pendingId, setPendingId] = useState(null);
+
+  /** PATCH /api/admin/companies/:id { verified } */
+  const handleVerification = async (company) => {
+    setPendingId(company.id);
+    try {
+      await setCompanyVerification(company.id, !company.verified);
+      showToast(
+        company.verified
+          ? `${company.name} can no longer publish drives.`
+          : `${company.name} is verified and can publish drives now.`,
+        'success',
+      );
+    } catch (error) {
+      showToast(error.message || 'Could not update this company.', 'error');
+    } finally {
+      setPendingId(null);
+    }
+  };
 
   /** Companies + how many drives/applications each one generated. */
   const companies = useMemo(
@@ -65,7 +92,11 @@ export default function AdminCompanies() {
                 <div className="grow" style={{ minWidth: 0 }}>
                   <div className="row gap-8 wrap">
                     <span className="strong">{company.name}</span>
-                    {company.verified ? <span className="badge badge--success">Verified</span> : null}
+                    {company.verified ? (
+                      <span className="badge badge--success">Verified</span>
+                    ) : (
+                      <span className="badge badge--warning">Awaiting approval</span>
+                    )}
                   </div>
                   <div className="text-xs muted">{company.industry}</div>
                 </div>
@@ -96,6 +127,18 @@ export default function AdminCompanies() {
                   <span className="badge badge--success">{company.selected} selected</span>
                 ) : null}
               </div>
+
+              <Button
+                variant={company.verified ? 'outline' : 'success'}
+                size="sm"
+                icon={company.verified ? 'x' : 'check'}
+                className="mt-16"
+                loading={pendingId === company.id}
+                disabled={pendingId !== null && pendingId !== company.id}
+                onClick={() => handleVerification(company)}
+              >
+                {company.verified ? 'Revoke verification' : 'Verify company'}
+              </Button>
             </article>
           ))}
         </div>

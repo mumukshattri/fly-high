@@ -14,7 +14,7 @@ import { useData } from '../../context/DataContext';
 import { useToast } from '../../context/ToastContext';
 import { getCompanyApplications, getCompanyDrives } from '../../utils/selectors';
 import { formatDate } from '../../utils/format';
-import { APPLICATION_STATUSES } from '../../data/mockApplications';
+import { APPLICATION_STATUSES } from '../../config/pipeline';
 
 /**
  * pages/company/CompanyApplicants.jsx

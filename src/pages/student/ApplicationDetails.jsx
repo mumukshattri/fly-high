@@ -122,10 +122,12 @@ export default function ApplicationDetails() {
           <section className="card card--pad">
             <div className="row-between mb-16">
               <h2 className="section__title">Application Progress</h2>
-              <span className="section__hint">Applied &rarr; Under Review &rarr; Shortlisted &rarr; Selected</span>
+              <span className="section__hint">
+                Applied &rarr; Application reviewed &rarr; Shortlisted &rarr; Selected
+              </span>
             </div>
 
-            <StatusTimeline application={application} />
+            <StatusTimeline application={application} drive={drive} />
           </section>
 
           <section className="card card--pad">
@@ -149,6 +151,12 @@ export default function ApplicationDetails() {
                 <span className="summary-list__value">{application.statusHistory.length}</span>
               </div>
               <div className="summary-list__item">
+                <span className="summary-list__label">Drive date</span>
+                <span className="summary-list__value">
+                  {drive?.driveDate ? formatDate(drive.driveDate) : 'Not published'}
+                </span>
+              </div>
+              <div className="summary-list__item">
                 <span className="summary-list__label">Source</span>
                 <span className="summary-list__value">Campus recruitment drive</span>
               </div>
@@ -156,6 +164,20 @@ export default function ApplicationDetails() {
                 <span className="summary-list__label">Resume shared</span>
                 <span className="summary-list__value">{student?.resume?.fileName || 'Not uploaded'}</span>
               </div>
+            </div>
+
+            <div className="status-history mt-16">
+              {application.statusHistory.length === 0 ? (
+                <p className="text-sm muted">No status changes recorded yet.</p>
+              ) : (
+                [...application.statusHistory].reverse().map((entry, index) => (
+                  <div className="status-history__row" key={`${entry.status}-${entry.date}-${index}`}>
+                    <StatusBadge status={entry.status} />
+                    <span className="status-history__date">{formatDate(entry.date)}</span>
+                    <span className="status-history__note">{entry.note || 'No remark added.'}</span>
+                  </div>
+                ))
+              )}
             </div>
           </section>
 

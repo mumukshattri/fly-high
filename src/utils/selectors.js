@@ -13,7 +13,9 @@
  * pipeline; here we do it in JavaScript so the components stay readable.
  */
 
-import { checkEligibility } from './eligibility';
+// Explicit `.js` extension: this module is also imported by the Node backend,
+// and Node's ESM resolver (unlike Vite's) requires the full file name.
+import { checkEligibility } from './eligibility.js';
 
 /** Find the company that posted a drive. */
 export function getCompanyForDrive(drive, companies) {
