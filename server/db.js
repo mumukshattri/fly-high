@@ -16,7 +16,7 @@
 
 import mongoose from 'mongoose';
 
-import { requireMongoUri } from './config.js';
+import { IS_PRODUCTION, requireMongoUri } from './config.js';
 
 let connectionPromise = null;
 
@@ -31,7 +31,7 @@ const READY_STATE = {
  * Connect to MongoDB. Safe to call more than once: the existing connection is
  * reused so a hot reload or a second call does not open extra pools.
  */
-export async function connectDatabase(uri = requireMongoUri()) {
+export async function connectDatabase(uri = requireMongoUri(), { autoIndex = !IS_PRODUCTION } = {}) {
   if (mongoose.connection.readyState === 1) return mongoose.connection;
   if (connectionPromise) return connectionPromise;
 
@@ -41,8 +41,10 @@ export async function connectDatabase(uri = requireMongoUri()) {
     .connect(uri, {
       serverSelectionTimeoutMS: 10_000,
       maxPoolSize: 10,
-      // Indexes are declared on the schemas; let Mongoose build them.
-      autoIndex: true,
+      // Never create indexes as an implicit production deploy side effect.
+      // Development/test keep the convenient schema-index behavior; production
+      // indexes are created only by the explicit email index procedure.
+      autoIndex,
     })
     .then(() => mongoose.connection)
     .finally(() => {

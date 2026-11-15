@@ -24,6 +24,8 @@ import path from 'node:path';
 import { isAllowedOrigin, IS_PRODUCTION, ROOT_DIR } from './config.js';
 import { apiRouter } from './api.js';
 import { HttpError } from './http.js';
+import { emailWebhookHandler } from './email/webhook.js';
+import { sanitizeErrorText } from './email/log.js';
 
 const DIST_DIR = path.join(ROOT_DIR, 'dist');
 
@@ -161,7 +163,12 @@ function errorHandler(error, req, res, next) {
   }
 
   const status = error instanceof HttpError ? error.status : error?.status || 500;
-  if (status >= 500) console.error('[api] unhandled:', error);
+  if (status >= 500) {
+    console.error('[api] unhandled', {
+      name: String(error?.name || 'Error').slice(0, 80),
+      message: sanitizeErrorText(error?.message || 'unknown error'),
+    });
+  }
 
   // An HttpError's message is written by us and is safe (and useful) to show;
   // an unexpected 5xx is masked so internals never leak.
@@ -195,6 +202,14 @@ export function createApp() {
     }
     next();
   });
+
+  // Resend signs the RAW request body, so this route must run before the JSON
+  // parser. Signature verification is the authentication boundary.
+  app.post(
+    '/api/webhooks/resend',
+    express.raw({ type: 'application/json', limit: '512kb' }),
+    emailWebhookHandler,
+  );
 
   app.use(express.json({ limit: '256kb' }));
   app.use(sameSiteGuard);

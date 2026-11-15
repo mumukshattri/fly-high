@@ -14,6 +14,7 @@ import { useData } from '../../context/DataContext';
 import { useToast } from '../../context/ToastContext';
 import { getCompanyApplications, getCompanyDrives } from '../../utils/selectors';
 import { formatDate, deadlineLabel } from '../../utils/format';
+import { api } from '../../services/api';
 import { PIPELINE_STAGES } from '../../config/pipeline';
 
 /**
@@ -32,10 +33,11 @@ import { PIPELINE_STAGES } from '../../config/pipeline';
 export default function CompanyDashboard() {
   const company = useCurrentCompany();
   const data = useData();
-  const { loading, saving, createDrive, updateApplicationStatus } = data;
+  const { loading, saving, createDrive, updateApplicationStatus, refresh } = data;
   const { showToast } = useToast();
   const navigate = useNavigate();
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [emailSaving, setEmailSaving] = useState(false);
 
   const drives = useMemo(
     () => (company ? getCompanyDrives(company.id, data) : []),
@@ -74,6 +76,21 @@ export default function CompanyDashboard() {
     }
   };
 
+  /** PATCH /api/companies/me - recruiter email preference. */
+  const handleEmailPreference = async (event) => {
+    const next = event.target.checked;
+    setEmailSaving(true);
+    try {
+      await api.patch('/companies/me', { emailNotifications: next });
+      await refresh({ silent: true });
+      showToast(next ? 'Email notifications enabled.' : 'Email notifications disabled.', 'success');
+    } catch (error) {
+      showToast(error.message, 'error');
+    } finally {
+      setEmailSaving(false);
+    }
+  };
+
   /** POST /api/drives */
   const handleCreateDrive = async (payload) => {
     try {
@@ -98,6 +115,19 @@ export default function CompanyDashboard() {
           Create Drive
         </Button>
       </PageHeader>
+
+      <div className="card card--pad mb-24 row gap-12 wrap">
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={company.emailNotifications !== false}
+            disabled={emailSaving}
+            onChange={handleEmailPreference}
+          />
+          Email notifications for new applicants and drive updates
+        </label>
+        <span className="text-sm muted">In-app updates continue even when email is off.</span>
+      </div>
 
       {/* ------------------------------- KPI cards ------------------------------- */}
       <div className="stats-grid mb-24">

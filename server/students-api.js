@@ -173,6 +173,21 @@ export function applyProfilePayload(student, body = {}) {
     touch();
   }
 
+  if ('emailNotifications' in body) {
+    if (typeof body.emailNotifications !== 'boolean') {
+      throw badRequest('emailNotifications must be true or false.');
+    }
+    student.emailNotifications = body.emailNotifications;
+    touch();
+  }
+  if ('driveAnnouncements' in body) {
+    if (typeof body.driveAnnouncements !== 'boolean') {
+      throw badRequest('driveAnnouncements must be true or false.');
+    }
+    student.driveAnnouncements = body.driveAnnouncements;
+    touch();
+  }
+
   if ('phone' in body) {
     student.phone = cleanText(body.phone, 40);
     touch();

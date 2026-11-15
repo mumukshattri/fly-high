@@ -1,0 +1,45 @@
+# Never upload local secrets, private conversation data, or local-only artifacts
+# with a CLI or Git-based Vercel deployment.
+
+# Private conversation attachment data
+.cloud-attachments/
+
+# Environment files, including demo and local credential files
+.env
+.env.*
+.env*
+*.local
+
+# Local-only data, backups and database files
+storage/
+backups/
+logs/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+*.dump
+*.bak
+*.backup
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Local screenshots and audit artifacts
+/*.png
+/*.jpg
+/*.jpeg
+/*.webp
+screenshots/
+audit-*.png
+
+# Stray local files and internal review material
+h origin main
+docs/REVIEW_PACK.md
+.DS_Store
+Thumbs.db
+.vercel/
+
+# Tests are not part of the runtime bundle
+tests/

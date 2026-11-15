@@ -184,6 +184,8 @@ export function serializeStudent(doc) {
     invitationPending: Boolean(doc.invitationPending),
 
     placementStatus: doc.placementStatus || 'Active',
+    emailNotifications: doc.emailNotifications !== false,
+    driveAnnouncements: doc.driveAnnouncements !== false,
     registeredOn: doc.registeredOn || '',
     profileUpdatedAt: doc.profileUpdatedAt || null,
   };
@@ -205,6 +207,7 @@ export function serializeCompany(doc) {
     hrPhone: doc.hrPhone || '',
     about: doc.about || '',
     verified: Boolean(doc.verified),
+    emailNotifications: doc.emailNotifications !== false,
     registeredOn: doc.registeredOn || '',
   };
 }

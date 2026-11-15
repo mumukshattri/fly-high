@@ -232,6 +232,10 @@ const studentSchema = new mongoose.Schema(
     inviteCreatedAt: { type: Date, default: null },
 
     placementStatus: { type: String, default: 'Active', trim: true, maxlength: 30 },
+    /** Email is optional; in-app notifications remain independent. */
+    emailNotifications: { type: Boolean, default: true },
+    /** Placement-drive announcements are opt-out and additionally gated by the server rollout flag. */
+    driveAnnouncements: { type: Boolean, default: true },
     registeredOn: { type: String, default: () => new Date().toISOString().slice(0, 10) },
     profileUpdatedAt: { type: Date, default: null },
   },

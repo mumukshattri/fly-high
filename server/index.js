@@ -15,6 +15,7 @@
 
 import { createApp } from './app.js';
 import { connectDatabase, disconnectDatabase } from './db.js';
+import { sanitizeErrorText } from './email/log.js';
 import { HOST, NODE_ENV, PORT, requireMongoUri } from './config.js';
 
 /** Hide credentials before a URI is printed to the console. */
@@ -29,6 +30,8 @@ async function start() {
   await connectDatabase(uri);
   console.log('[db]  connected');
 
+  // Email indexes are NOT built during startup. Production index creation is
+  // an explicit operator action; the worker verifies before doing any work.
   const app = createApp();
 
   const server = app.listen(PORT, HOST, () => {
@@ -56,8 +59,9 @@ async function start() {
 }
 
 start().catch((error) => {
+  const message = safeUri(sanitizeErrorText(error?.message || 'unknown startup error', 500));
   console.error('\n[startup] Job N Job could not start:\n');
-  console.error(error.message?.startsWith('\n') ? error.message : `  ${error.message}`);
+  console.error(`  ${message}`);
   console.error('');
   process.exit(1);
 });

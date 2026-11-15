@@ -28,3 +28,12 @@ logs/
 
 # private resume storage (never committed)
 storage/
+
+.vercel
+.env*
+
+# local database/storage backups (may contain personal data)
+backups/
+
+# Imported conversation exports are private.
+.cloud-attachments/

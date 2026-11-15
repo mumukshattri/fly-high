@@ -15,3 +15,7 @@ export { Application, default as applicationModel } from './application.js';
 export { Notification, default as notificationModel } from './notification.js';
 export { Session, default as sessionModel } from './session.js';
 export { RealtimeState, default as realtimeModel } from './realtime.js';
+export { EmailOutbox, default as emailOutboxModel } from './email-outbox.js';
+export { EmailIntent, default as emailIntentModel } from './email-intent.js';
+export { EmailFanoutJob, default as emailFanoutJobModel } from './email-fanout-job.js';
+export { EmailWebhookEvent, default as emailWebhookEventModel } from './email-webhook-event.js';

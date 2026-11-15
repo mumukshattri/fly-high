@@ -4,13 +4,23 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
-    "api/[...route].js": {
+    "api/index.js": {
       "maxDuration": 30
     }
   },
+  "crons": [
+    {
+      "path": "/api/internal/email/worker?task=email",
+      "schedule": "0 2 * * *"
+    }
+  ],
   "rewrites": [
     {
-      "source": "/((?!api(?:/|$)).*)",
+      "source": "/api/(.*)",
+      "destination": "/api"
+    },
+    {
+      "source": "/(.*)",
       "destination": "/index.html"
     }
   ]

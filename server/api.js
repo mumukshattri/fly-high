@@ -19,6 +19,8 @@
  */
 
 import express from 'express';
+import mongoose from 'mongoose';
+import { randomUUID } from 'node:crypto';
 
 import {
   Application,
@@ -79,6 +81,32 @@ import {
 } from './external-jobs.js';
 import { registerStudentProfileRoutes, updateOwnProfile } from './students-api.js';
 import { registerAdminStudentRoutes } from './admin-students-api.js';
+import {
+  adminNewCompanySpecs,
+  applicationStatusSpec,
+  applicationSubmittedSpec,
+  companyApprovedSpec,
+  companyWelcomeSpec,
+  driveClosedSpec,
+  drivePublishedSpec,
+  newApplicationSpec,
+  prepareEmailSpecs,
+  queueAdminNewCompany,
+  queueApplicationStatus,
+  queueApplicationSubmitted,
+  queueCompanyApproved,
+  queueCompanyWelcome,
+  queueDriveAnnouncements,
+  queueDriveClosed,
+  queueDrivePublished,
+  queueNewApplication,
+  queueStudentWelcome,
+  studentWelcomeSpec,
+} from './email/events.js';
+import { EMAIL_DRIVE_ANNOUNCEMENTS, emailIsReady } from './email/config.js';
+import { skipEmailIntents } from './email/intents.js';
+import { registerEmailRoutes } from './email/routes.js';
+import { emailLog, safeError } from './email/log.js';
 import { databaseStatus } from './db.js';
 import { checkEligibility } from '../src/utils/eligibility.js';
 import { getPlacementStatistics } from '../src/utils/selectors.js';
@@ -282,7 +310,9 @@ apiRouter.post(
     let user;
 
     if (role === 'company') {
-      account = await Company.create({
+      const companyId = new mongoose.Types.ObjectId();
+      const draft = {
+        _id: companyId,
         name,
         industry: cleanText(req.body.industry, 120) || 'Not specified',
         location: cleanText(req.body.location, 120) || 'Not specified',
@@ -292,22 +322,39 @@ apiRouter.post(
         hrEmail: email,
         hrPhone: cleanText(req.body.phone, 40),
         about: cleanMultiline(req.body.about, 2000),
-        verified: false,
-        passwordHash,
+        emailNotifications: true,
         registeredOn,
-      });
+      };
+
+      // Prepare the durable intents BEFORE the business write. A crash after
+      // Company.create but before the outbox insert is recovered by the worker.
+      const prepared = await prepareEmailSpecs([
+        companyWelcomeSpec(draft, { companyId }),
+        ...(await adminNewCompanySpecs(draft, { companyId })),
+      ]);
+
+      try {
+        account = await Company.create({ ...draft, verified: false, passwordHash });
+      } catch (error) {
+        await skipEmailIntents(prepared, 'company registration did not complete');
+        throw error;
+      }
+
       user = serializeCompany(account.toObject());
       broadcast('companies', { action: 'registered', companyId: user.id });
+      await queueCompanyWelcome(account);
+      await queueAdminNewCompany(account);
     } else {
       const cgpa = Number(req.body.cgpa);
       if (Number.isNaN(cgpa) || cgpa < 0 || cgpa > 10) {
         throw badRequest('CGPA must be between 0 and 10.');
       }
 
-      account = await Student.create({
+      const studentId = new mongoose.Types.ObjectId();
+      const draft = {
+        _id: studentId,
         name,
         email,
-        passwordHash,
         rollNumber: cleanText(req.body.rollNumber, 40),
         phone: cleanText(req.body.phone, 40),
         university: cleanText(req.body.university, 200) || 'Not specified',
@@ -319,21 +366,37 @@ apiRouter.post(
         about: cleanMultiline(req.body.about, 2000),
         placementStatus: 'Active',
         registeredOn,
-      });
+      };
+
+      const prepared = await prepareEmailSpecs([
+        studentWelcomeSpec(draft, { studentId }),
+      ]);
+
+      try {
+        account = await Student.create({ ...draft, passwordHash });
+      } catch (error) {
+        await skipEmailIntents(prepared, 'student registration did not complete');
+        throw error;
+      }
 
       user = serializeStudent(account.toObject());
 
-      await Notification.create({
-        student: user.id,
-        type: 'info',
-        title: 'Welcome to Job N Job',
-        message:
-          'Complete your profile and upload your resume to unlock eligible recruitment drives.',
-        date: registeredOn,
-      });
+      try {
+        await Notification.create({
+          student: user.id,
+          type: 'info',
+          title: 'Welcome to Job N Job',
+          message:
+            'Complete your profile and upload your resume to unlock eligible recruitment drives.',
+          date: registeredOn,
+        });
+      } catch (error) {
+        emailLog('in-app welcome notification could not be persisted', { error: safeError(error) });
+      }
 
       broadcast('students', { action: 'registered', studentId: user.id });
       broadcast('notifications', { studentId: user.id });
+      await queueStudentWelcome(account);
     }
 
     const session = await createSession(user, req, { remember: req.body?.remember !== false });
@@ -414,6 +477,24 @@ apiRouter.get(
   requireAuth(),
   asyncHandler(async (req, res) => {
     res.json(await visibleCompanies(req.user));
+  }),
+);
+
+/** PATCH /api/companies/me - recruiter email preference. */
+apiRouter.patch(
+  '/companies/me',
+  requireAuth(['company']),
+  asyncHandler(async (req, res) => {
+    if (typeof req.body?.emailNotifications !== 'boolean') {
+      throw badRequest('Only { "emailNotifications": true|false } is supported here.');
+    }
+    const company = await Company.findByIdAndUpdate(
+      req.user.id,
+      { $set: { emailNotifications: req.body.emailNotifications } },
+      { new: true },
+    ).lean();
+    if (!company) throw notFound('Company account not found.');
+    res.json(serializeCompany(company));
   }),
 );
 
@@ -509,15 +590,46 @@ apiRouter.post(
     }
 
     const payload = readDrivePayload(req.body);
-    const doc = await Drive.create({
-      company: req.user.id,
-      ...payload,
-      postedOn: today(),
-      status: 'Open',
-    });
+    const driveId = new mongoose.Types.ObjectId();
+    // Only write the durable announcement handle when the feature is enabled
+    // and fully configured. Otherwise a later rollout could reconcile old
+    // drives and send announcements for stale postings.
+    const announcementJobId = EMAIL_DRIVE_ANNOUNCEMENTS && emailIsReady()
+      ? `drive-announcements/${driveId}`
+      : '';
+    const prepared = await prepareEmailSpecs([
+      drivePublishedSpec(
+        {
+          _id: driveId,
+          role: payload.role,
+          location: payload.location,
+          package: payload.package,
+          deadline: payload.deadline,
+        },
+        company,
+        { driveId },
+      ),
+    ]);
+
+    let doc;
+    try {
+      doc = await Drive.create({
+        _id: driveId,
+        company: req.user.id,
+        ...payload,
+        postedOn: today(),
+        status: 'Open',
+        announcementJobId,
+      });
+    } catch (error) {
+      await skipEmailIntents(prepared, 'drive creation did not complete');
+      throw error;
+    }
 
     const drive = serializeDrive(doc.toObject());
     broadcast('drives', { action: 'created', driveId: drive.id });
+    await queueDrivePublished(doc, company);
+    await queueDriveAnnouncements(doc, company);
     res.status(201).json(drive);
   }),
 );
@@ -528,6 +640,7 @@ apiRouter.patch(
   requireAuth(['company', 'admin']),
   asyncHandler(async (req, res) => {
     const drive = await loadManageableDrive(req.user, req.params.id);
+    const previousStatus = drive.status;
     const body = req.body || {};
     const update = {};
 
@@ -544,10 +657,24 @@ apiRouter.patch(
 
     if (Object.keys(update).length === 0) throw badRequest('Nothing to update.');
 
-    await Drive.updateOne({ _id: drive._id }, { $set: update });
+    const closing = previousStatus === 'Open' && update.status === 'Closed';
+    const company = closing ? await Company.findById(drive.company).lean() : null;
+    const prepared = closing && company
+      ? await prepareEmailSpecs([driveClosedSpec(drive, company)])
+      : [];
+
+    try {
+      await Drive.updateOne({ _id: drive._id }, { $set: update });
+    } catch (error) {
+      await skipEmailIntents(prepared, 'drive update did not complete');
+      throw error;
+    }
     const updated = await Drive.findById(drive._id).lean();
 
     broadcast('drives', { action: 'updated', driveId: req.params.id });
+    if (previousStatus === 'Open' && updated?.status === 'Closed' && company) {
+      await queueDriveClosed(updated, company);
+    }
     res.json(serializeDrive(updated));
   }),
 );
@@ -616,9 +743,34 @@ apiRouter.post(
     }
 
     const date = today();
+    const applicationId = new mongoose.Types.ObjectId();
+    const appliedEventId = randomUUID();
+    const company = await Company.findById(driveDoc.company)
+      .select('name hrEmail hrName emailNotifications')
+      .lean();
+
+    const applicationDraft = { _id: applicationId, appliedOn: date };
+    const prepared = await prepareEmailSpecs([
+      applicationSubmittedSpec({
+        application: applicationDraft,
+        student: studentDoc,
+        drive: driveDoc,
+        company,
+        applicationId,
+      }),
+      newApplicationSpec({
+        application: applicationDraft,
+        student: studentDoc,
+        drive: driveDoc,
+        company,
+        applicationId,
+      }),
+    ]);
+
     let created;
     try {
       created = await Application.create({
+        _id: applicationId,
         drive: driveId,
         student: req.user.id,
         status: 'Applied',
@@ -626,23 +778,39 @@ apiRouter.post(
         lastUpdated: date,
         recruiterNote: '',
         statusHistory: [
-          { status: 'Applied', date, note: 'Application submitted by the student.' },
+          {
+            status: 'Applied',
+            date,
+            note: 'Application submitted by the student.',
+            eventId: appliedEventId,
+          },
         ],
       });
     } catch (error) {
+      await skipEmailIntents(prepared, 'application creation did not complete');
       // The unique (drive, student) index wins the race between two clicks.
       if (error?.code === 11000) throw conflict('You have already applied for this drive.');
       throw error;
     }
 
-    const company = await Company.findById(driveDoc.company).select('name').lean();
-    await Notification.create({
-      student: req.user.id,
-      type: 'success',
-      title: 'Application submitted',
-      message: `Your application for ${drive.role} at ${company?.name || 'the company'} was submitted successfully.`,
-      date,
-    });
+    try {
+      await Notification.create({
+        student: req.user.id,
+        type: 'success',
+        title: 'Application submitted',
+        message: `Your application for ${drive.role} at ${company?.name || 'the company'} was submitted successfully.`,
+        date,
+      });
+    } catch (error) {
+      // The application exists; an in-app notification failure must not turn a
+      // successful submission into an error response.
+      emailLog('in-app application notification could not be persisted', {
+        error: safeError(error),
+      });
+    }
+
+    await queueApplicationSubmitted({ application: created, student: studentDoc, drive: driveDoc, company });
+    await queueNewApplication({ application: created, student: studentDoc, drive: driveDoc, company });
 
     broadcast('applications', { action: 'created', driveId });
     broadcast('notifications', { studentId: req.user.id });
@@ -676,27 +844,85 @@ apiRouter.patch(
 
     const note = cleanText(req.body?.note, 500);
     const date = today();
-
-    application.status = status;
-    application.lastUpdated = date;
-    if (note) application.recruiterNote = note;
-    application.statusHistory.push({
-      status,
-      date,
-      note: note || `Status changed to ${status} by the recruiter.`,
-    });
-    await application.save();
-
+    const transitionId = randomUUID();
     const company = await Company.findById(drive.company).select('name').lean();
+    const studentDoc = await Student.findById(application.student).lean();
+
+    // Durable intent first: if the process dies after the atomic status write,
+    // the worker confirms the transition id and queues the email.
+    const prepared = studentDoc
+      ? await prepareEmailSpecs([
+          applicationStatusSpec({
+            application,
+            student: studentDoc,
+            drive,
+            company,
+            status,
+            transitionId,
+          }),
+        ])
+      : [];
+
+    let updated;
+    try {
+      const update = {
+        $set: {
+          status,
+          lastUpdated: date,
+          ...(note ? { recruiterNote: note } : {}),
+        },
+        $push: {
+          statusHistory: {
+            status,
+            date,
+            note: note || `Status changed to ${status} by the recruiter.`,
+            eventId: transitionId,
+          },
+        },
+      };
+      updated = await Application.findOneAndUpdate(
+        { _id: application._id, status: { $ne: status } },
+        update,
+        { new: true },
+      );
+    } catch (error) {
+      await skipEmailIntents(prepared, 'application status update did not complete');
+      throw error;
+    }
+
+    if (!updated) {
+      // Another concurrent request already made this exact transition.
+      await skipEmailIntents(prepared, 'duplicate concurrent status transition');
+      const current = await Application.findById(application._id).lean();
+      return res.json(serializeApplication(current || application.toObject()));
+    }
+
     const type = status === 'Rejected' ? 'danger' : status === 'Selected' ? 'success' : 'info';
 
-    await Notification.create({
-      student: application.student,
-      type,
-      title: `Application ${status}`,
-      message: `${company?.name || 'The company'} updated your application for ${drive.role} to "${status}".`,
-      date,
-    });
+    try {
+      await Notification.create({
+        student: application.student,
+        type,
+        title: `Application ${status}`,
+        message: `${company?.name || 'The company'} updated your application for ${drive.role} to "${status}".`,
+        date,
+      });
+    } catch (error) {
+      // The status change is the business truth. A notification failure must
+      // not turn a successful update into an error response.
+      emailLog('in-app notification could not be persisted', { error: safeError(error) });
+    }
+
+    if (studentDoc) {
+      await queueApplicationStatus({
+        application: updated,
+        student: studentDoc,
+        drive,
+        company,
+        status,
+        transitionId,
+      });
+    }
 
     broadcast('applications', { action: 'status-changed', applicationId: req.params.id });
     broadcast('notifications', { studentId: String(application.student) });
@@ -704,7 +930,7 @@ apiRouter.patch(
       broadcast('students', { action: 'placed', studentId: String(application.student) });
     }
 
-    res.json(serializeApplication(application.toObject()));
+    res.json(serializeApplication(updated.toObject()));
   }),
 );
 
@@ -788,14 +1014,28 @@ apiRouter.patch(
       throw badRequest('Only { "verified": true|false } is supported here.');
     }
 
-    const company = await Company.findByIdAndUpdate(
-      req.params.id,
-      { $set: { verified: req.body.verified } },
-      { new: true },
-    ).lean();
-    if (!company) throw notFound('Company not found.');
+    const existing = await Company.findById(req.params.id);
+    if (!existing) throw notFound('Company not found.');
+
+    const wasVerified = existing.verified;
+    const approving = !wasVerified && req.body.verified;
+    const prepared = approving
+      ? await prepareEmailSpecs([companyApprovedSpec(existing)])
+      : [];
+
+    existing.verified = req.body.verified;
+    try {
+      await existing.save();
+    } catch (error) {
+      await skipEmailIntents(prepared, 'company approval did not complete');
+      throw error;
+    }
+    const company = existing.toObject();
 
     broadcast('companies', { action: 'verified', companyId: req.params.id });
+    if (!wasVerified && company.verified) {
+      await queueCompanyApproved(existing);
+    }
     res.json(serializeCompany(company));
   }),
 );
@@ -830,6 +1070,7 @@ apiRouter.get(
 
 registerStudentProfileRoutes(apiRouter);
 registerAdminStudentRoutes(apiRouter);
+registerEmailRoutes(apiRouter);
 
 /* -------------------------------------------------------------------------- */
 /* EXTERNAL JOB DISCOVERY (Adzuna)                                            */

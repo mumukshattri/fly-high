@@ -17,6 +17,13 @@ const statusHistorySchema = new mongoose.Schema(
     status: { type: String, required: true },
     date: { type: String, required: true },
     note: { type: String, default: '', maxlength: 500 },
+    /**
+     * Unique id for this individual transition. It is written with the status
+     * change and used as the email idempotency key, so two legitimate moves to
+     * the same status at different times never suppress each other and a retry
+     * of the same move never duplicates the email.
+     */
+    eventId: { type: String, default: '', maxlength: 80 },
   },
   { _id: false },
 );

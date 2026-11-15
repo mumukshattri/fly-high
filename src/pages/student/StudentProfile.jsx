@@ -221,6 +221,8 @@ export default function StudentProfile() {
       backlogs: Number(form.backlogs),
       graduationYear: Number(form.graduationYear),
       preferences: form.preferences,
+      emailNotifications: form.emailNotifications !== false,
+      driveAnnouncements: form.driveAnnouncements !== false,
     });
 
     if (ok) setIsEditing(false);
@@ -912,6 +914,27 @@ export default function StudentProfile() {
 
           {isEditing ? (
             <div className="col gap-12">
+              <div className="field">
+                <label className="label">Email notifications</label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={form.emailNotifications !== false}
+                    onChange={(event) => update('emailNotifications', event.target.checked)}
+                  />
+                  Send account and application emails to {form.email || 'my email'}
+                </label>
+                <label className="checkbox">
+                  <input
+                    type="checkbox"
+                    checked={form.driveAnnouncements !== false}
+                    onChange={(event) => update('driveAnnouncements', event.target.checked)}
+                  />
+                  Send me new placement-drive announcements
+                </label>
+                <span className="field__hint">In-app notifications are separate and are not affected by these settings.</span>
+              </div>
+
               <ChipEditor
                 label="Preferred roles"
                 values={form.preferences.roles}

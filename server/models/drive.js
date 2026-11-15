@@ -46,11 +46,19 @@ const driveSchema = new mongoose.Schema(
     description: { type: String, default: '', maxlength: 5000 },
     responsibilities: { type: [String], default: [] },
     selectionProcess: { type: [String], default: [] },
+
+    /**
+     * Durable handle for the bounded drive-announcement fan-out. Written with
+     * the drive, so recovery can recreate the job if the process dies before
+     * the job row is inserted.
+     */
+    announcementJobId: { type: String, default: '', maxlength: 160 },
   },
   { timestamps: true },
 );
 
 driveSchema.index({ status: 1, postedOn: -1 });
+driveSchema.index({ announcementJobId: 1 });
 
 export const Drive = mongoose.models.Drive || mongoose.model('Drive', driveSchema);
 export default Drive;

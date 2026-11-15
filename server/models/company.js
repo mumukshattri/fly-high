@@ -36,6 +36,8 @@ const companySchema = new mongoose.Schema(
 
     about: { type: String, default: '', maxlength: 2000 },
     verified: { type: Boolean, default: false },
+    /** Recruiter transactional emails; in-app behavior is unaffected. */
+    emailNotifications: { type: Boolean, default: true },
     passwordHash: { type: String, required: true, select: false },
     registeredOn: { type: String, default: () => new Date().toISOString().slice(0, 10) },
   },
